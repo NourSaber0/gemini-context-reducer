@@ -38,6 +38,15 @@ server.tool(
 
       const sourceFile = project.addSourceFileAtPath(absolutePath);
       let skeletonOutput = `--- SKELETON FOR: ${filePath} ---\n\n`;
+      // 1. Extract Dependencies (The Edges of the Graph)
+        skeletonOutput += `--- DEPENDENCY GRAPH (IMPORTS) ---\n`;
+        const imports = sourceFile.getImportDeclarations();
+        imports.forEach(imp => {
+          // This gets the file path being imported (e.g., '../utils/logger')
+          const modulePath = imp.getModuleSpecifierValue(); 
+          skeletonOutput += `depends_on: "${modulePath}"\n`;
+        });
+        skeletonOutput += `\n--- STRUCTURAL SKELETON ---\n`;
 
       // Extract Classes and Methods
       const classes = sourceFile.getClasses();
