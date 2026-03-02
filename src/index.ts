@@ -58,10 +58,14 @@ server.tool(
                 if (body && Node.isBlock(body)) (init as any).setBodyText(`\n    ${reductionMsg}\n`);
             }
       });
-        const imports = sourceFile.getImportDeclarations().map(imp => ({
-            module: imp.getModuleSpecifierValue(),
-            resolved: resolveImportPath(absolutePath, imp.getModuleSpecifierValue())
-        }));
+        const imports = sourceFile.getImportDeclarations()
+    .map(imp => {
+        const mod = imp.getModuleSpecifierValue();
+        const res = resolveImportPath(absolutePath, mod);
+        return res ? `${mod} -> ${res}` : null;
+    })
+    .filter(Boolean)
+    .join('\n');
       const output = sourceFile.getFullText();
       sourceFile.forget(); 
   return { content: [{ type: 'text', text: `RESOLVED_IMPORTS:\n${JSON.stringify(imports, null, 2)}\n\nSKELETON:\n${output}` }] };
