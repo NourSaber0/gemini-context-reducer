@@ -36,27 +36,107 @@ server.tool(
       console.error(`[Context Reducer] Analyzing file: ${absolutePath}`);
 
       const sourceFile = project.addSourceFileAtPath(absolutePath);
-      const reductionMsg = '/* omitted */';
-        const prune = (node: any) => {
-            if (node.setBodyText) node.setBodyText(`\n    ${reductionMsg}\n`);
-        };
-      // Extract Functions ,Classes and Methods, replacing their bodies with a placeholder message to indicate they were pruned.
-      sourceFile.getFunctions().forEach(prune);
+      // const reductionMsg = '/* omitted */';
+      //   const prune = (node: any) => {
+      //       if (node.setBodyText) node.setBodyText(`\n    ${reductionMsg}\n`);
+      //   };
+      // // Extract Functions ,Classes and Methods, replacing their bodies with a placeholder message to indicate they were pruned.
+      // sourceFile.getFunctions().forEach(prune);
+      // sourceFile.getClasses().forEach(cls => {
+      //   prune(cls);
+      //   cls.getMethods().forEach(prune);
+      // });
+      // sourceFile.getExportedDeclarations().forEach((decls, name) => {
+      //   decls.forEach(decl => {
+      //     if (decl.getKindName() === 'FunctionDeclaration' || decl.getKindName() === 'MethodDeclaration' || decl.getKindName() === 'VariableDeclaration') prune(decl);
+      //   });
+      // });
+      // sourceFile.getVariableDeclarations().forEach(decl => {
+      //       const init = decl.getInitializer();
+      //       if (init && (Node.isArrowFunction(init) || Node.isFunctionExpression(init))) {
+      //           const body = (init as any).getBody();
+      //           if (body && Node.isBlock(body)) (init as any).setBodyText(`\n    ${reductionMsg}\n`);
+      //       }
+      // });
+      let skeleton = '';
+
+      // 1. Extract Interfaces
+      sourceFile.getInterfaces().forEach(iface => {
+          const exportKw = iface.isExported() ? 'export ' : '';
+          skeleton += `${exportKw}interface ${iface.getName()} {\n`;
+          iface.getProperties().forEach(prop => {
+              // getTypeNode() gets the raw text the dev wrote, avoiding type-checker bloat!
+              const typeStr = prop.getTypeNode()?.getText() || 'any';
+              skeleton += `  ${prop.getName()}: ${typeStr};\n`;
+          });
+          skeleton += `}\n\n`;
+      });
+
+      // 2. Extract Types (Type Aliases)
+      sourceFile.getTypeAliases().forEach(typeAlias => {
+          const exportKw = typeAlias.isExported() ? 'export ' : '';
+          const typeStr = typeAlias.getTypeNode()?.getText() || 'any';
+          skeleton += `${exportKw}type ${typeAlias.getName()} = ${typeStr};\n\n`;
+      });
+
+      // 3. Extract Classes & Methods
+     // 3. Extract Classes, Properties, & Methods
       sourceFile.getClasses().forEach(cls => {
-        prune(cls);
-        cls.getMethods().forEach(prune);
+          const exportKw = cls.isExported() ? 'export ' : '';
+          
+          // Grab inheritance!
+          const extendsClause = cls.getExtends() ? ` extends ${cls.getExtends()?.getText()}` : '';
+          const implementsClause = cls.getImplements().length > 0 
+              ? ` implements ${cls.getImplements().map(i => i.getText()).join(', ')}` 
+              : '';
+
+          skeleton += `${exportKw}class ${cls.getName() || 'Anonymous'}${extendsClause}${implementsClause} {\n`;
+          
+          // Grab class properties (variables inside the class)!
+          cls.getProperties().forEach(prop => {
+              const modifiers = prop.getModifiers().map(m => m.getText()).join(' ');
+              const typeStr = prop.getTypeNode()?.getText() || 'any';
+              skeleton += `  ${modifiers ? modifiers + ' ' : ''}${prop.getName()}: ${typeStr};\n`;
+          });
+
+          // Grab the methods!
+          cls.getMethods().forEach(method => {
+              const params = method.getParameters().map(p => p.getName()).join(', ');
+              const returnType = method.getReturnTypeNode()?.getText() || 'any';
+              skeleton += `  ${method.getName()}(${params}): ${returnType};\n`;
+          });
+          skeleton += `}\n\n`;
       });
-      sourceFile.getExportedDeclarations().forEach((decls, name) => {
-        decls.forEach(decl => {
-          if (decl.getKindName() === 'FunctionDeclaration' || decl.getKindName() === 'MethodDeclaration' || decl.getKindName() === 'VariableDeclaration') prune(decl);
-        });
+
+      // 4. Extract Standalone Functions
+      sourceFile.getFunctions().forEach(func => {
+          const exportKw = func.isExported() ? 'export ' : '';
+          const params = func.getParameters().map(p => p.getName()).join(', ');
+          const returnType = func.getReturnTypeNode()?.getText() || 'any';
+          skeleton += `${exportKw}function ${func.getName() || 'Anonymous'}(${params}): ${returnType};\n`;
       });
-      sourceFile.getVariableDeclarations().forEach(decl => {
-            const init = decl.getInitializer();
-            if (init && (Node.isArrowFunction(init) || Node.isFunctionExpression(init))) {
-                const body = (init as any).getBody();
-                if (body && Node.isBlock(body)) (init as any).setBodyText(`\n    ${reductionMsg}\n`);
-            }
+      if (sourceFile.getFunctions().length > 0) skeleton += '\n';
+
+      // 5. Extract Variables & Arrow Functions
+      sourceFile.getVariableStatements().forEach(varStmt => {
+          const exportKw = varStmt.isExported() ? 'export ' : '';
+          const declKind = varStmt.getDeclarationKind(); // 'const', 'let', or 'var'
+
+          varStmt.getDeclarations().forEach(decl => {
+              const init = decl.getInitializer();
+              
+              // Check if the variable is actually an arrow function!
+              if (init && (Node.isArrowFunction(init) || Node.isFunctionExpression(init))) {
+                  const params = (init as any).getParameters().map((p: any) => p.getName()).join(', ');
+                  const returnType = (init as any).getReturnTypeNode()?.getText() || 'any';
+                  skeleton += `${exportKw}${declKind} ${decl.getName()} = (${params}) => ${returnType};\n`;
+              } 
+              // Otherwise, if it's a standard exported constant, just grab its type
+              else if (varStmt.isExported()) {
+                  const typeStr = decl.getTypeNode()?.getText() || 'any';
+                  skeleton += `${exportKw}${declKind} ${decl.getName()}: ${typeStr};\n`;
+              }
+          });
       });
         const imports = sourceFile.getImportDeclarations()
     .map(imp => {
@@ -66,9 +146,15 @@ server.tool(
     })
     .filter(Boolean)
     .join('\n');
-      const output = sourceFile.getText();
+      const output = sourceFile.getFullText();
       sourceFile.forget(); 
-  return { content: [{ type: 'text', text: `RESOLVED_IMPORTS:\n${JSON.stringify(imports, null, 2)}\n\nSKELETON:\n${output}` }] };
+      
+      // Pass 'imports' and 'skeleton' directly! No stringify, no full text!
+      return { content: [{ type: 'text', text: `RESOLVED_IMPORTS:\n${imports}\n\nSKELETON:\n${skeleton}` }] };
+  // return { content: [{ type: 'text', text: `RESOLVED_IMPORTS:\n${JSON.stringify(imports, null, 2)}\n\nSKELETON:\n${output}` }] };
+  //   } catch (e: any) {
+  //       return { content: [{ type: 'text', text: String(e), isError: true }] };
+  //   }
     } catch (e: any) {
         return { content: [{ type: 'text', text: String(e), isError: true }] };
     }
