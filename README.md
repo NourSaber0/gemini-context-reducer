@@ -2,38 +2,52 @@
 
 A Model Context Protocol (MCP) server designed to solve token bloat and context exhaustion when using AI agents on large, highly relational monorepos like Rocket.Chat.
 
-## The Problem: Context Window Bloat
-When the `gemini-cli` reads a massive file (e.g., a core service), it injects the entire raw text into the LLM's context window. For large repositories, this leads to:
-1. Rapidly exhausting the free-tier API token budget.
-2. Slower inference times.
-3. "Lost in the Middle" hallucinations as the agent struggles to find the architecture hidden within thousands of lines of implementation logic.
+## ⚠️ The Problem: Context Window Bloat
+When the `gemini-cli` reads a massive file (e.g., a core service), it injects the entire raw text into the LLM's context window. For large enterprise repositories, this leads to:
+* Rapidly exhausting the API token budget.
+* Slower inference times and rate-limiting.
+* "Lost in the Middle" hallucinations as the agent struggles to find the core architecture hidden within thousands of lines of implementation logic, whitespace, and JSDoc comments.
 
-## The Solution: Domain-Specific Graph Retrieval
+## 💡 The Solution: Domain-Specific Graph Retrieval & Zero-Bloat Parsing
 Instead of generic file-reading, this tool intercepts requests and uses `ts-morph` to parse the Abstract Syntax Tree (AST) of TypeScript/JavaScript files. 
 
-It performs two critical domain-specific optimizations:
-1. **Dependency Mapping (Edges):** Extracts `import` statements to map exactly what the file depends on, acting as a dynamic Graph-RAG router.
-2. **Structural Skeletons (Nodes):** Strips away internal implementation details and returns only class definitions, method signatures, and exported functions.
+It treats the monorepo as a Knowledge Graph, performing two critical domain-specific optimizations:
+1.  **Dependency Mapping (Edges):** Extracts `import` statements and resolves their absolute paths (including custom `@rocket.chat/` and `meteor/` workspace routing), acting as a dynamic Graph-RAG router.
+2.  **Structural Skeletons (Nodes):** Reconstructs the file architecture from scratch. It perfectly extracts Classes, Methods (with modifiers), Interfaces, Types, Standalone Functions, and Arrow Functions (`export const foo = () => {}`) while stripping away 100% of the useless token bloat.
 
-### 📊 Benchmark (`messages/service.ts` in Rocket.Chat)
-* **Standard Read:** 339 lines (~2,760 tokens)
-* **AST Skeleton Tool:** 22 lines (~200 tokens)
-* **Net Impact:** A **93% reduction** in context payload.
+## 🛠️ Included Tools
+1.  **`read_file_skeleton`**: Reads a file and returns only the resolved dependency graph and the zero-bloat structural map.
+2.  **`read_symbol_details`**: A dedicated drill-down tool. Allows the agent to fetch the specific, full implementation logic of a method, class, or function on-demand after reading the skeleton.
+3.  **`search_symbol`**: A lightweight `grep`-based global search to help the agent quickly locate where specific symbols live across the entire monorepo.
 
-## Example Output
+## 📊 Real-World Benchmark
+Tested on `apps/meteor/server/services/messages/service.ts` in the Rocket.Chat monorepo.
+
+* **Standard File Read:** 11,053 characters (~2,760 tokens)
+* **AST Graph & Skeleton Tool:** 4,206 characters (~1,050 tokens)
+* **Net Impact:** A **~62% reduction** in context payload.
+* **Added Value:** Traded useless implementation bloat and JSDoc comments for highly-structured dependency resolution paths (`RESOLVED_IMPORTS`), empowering the LLM to traverse the codebase without token exhaustion.
+
+## 🔍 How It Works:
+To prevent LLM context exhaustion, 
+
+* **The Zero-Bloat Generator:** Instead of mutating the original file, our tool completely ignores the raw text. It traverses the AST to map the structural nodes and dynamically generates a brand-new, ultra-lean skeleton string from scratch.
+
+### Example Output
 When the Gemini agent calls `read_file_skeleton` on a service, it receives a highly optimized map:
 
-```text
---- DEPENDENCY GRAPH (IMPORTS) ---
-depends_on: "@rocket.chat/models"
-depends_on: "../../../app/lib/server/functions/sendMessage"
-depends_on: "../../../app/lib/server/functions/updateMessage"
+```typescript
+RESOLVED_IMPORTS:
+../utils/validation -> /absolute/path/to/validation.ts
 
---- STRUCTURAL SKELETON ---
-export class MessageService {
-  created(): Promise<void>;
-  sendMessage({ fromId, rid, msg }: { fromId: string; rid: string; msg: string; }): Promise<IMessage>;
-  deleteMessage(user: IUser, message: IMessage): Promise<void>;
-  // ...
+SKELETON:
+export interface Session {
+  token: string;
 }
-*(Instructions on how to run `npm run build` and `gemini extensions link .`)*
+
+export class AuthService extends ServiceClassInternal {
+  private cache: any;
+  async login(userId, token): Promise<Session>;
+}
+
+export const formatName = (first, last) => string;
