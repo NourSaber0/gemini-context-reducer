@@ -36,7 +36,7 @@ server.tool(
       console.error(`[Context Reducer] Analyzing file: ${absolutePath}`);
 
       const sourceFile = project.addSourceFileAtPath(absolutePath);
-      const reductionMsg = '/* Logic omitted. Use read_symbol_details. */';
+      const reductionMsg = '/* omitted */';
         const prune = (node: any) => {
             if (node.setBodyText) node.setBodyText(`\n    ${reductionMsg}\n`);
         };
@@ -66,7 +66,7 @@ server.tool(
     })
     .filter(Boolean)
     .join('\n');
-      const output = sourceFile.getFullText();
+      const output = sourceFile.getText();
       sourceFile.forget(); 
   return { content: [{ type: 'text', text: `RESOLVED_IMPORTS:\n${JSON.stringify(imports, null, 2)}\n\nSKELETON:\n${output}` }] };
     } catch (e: any) {
