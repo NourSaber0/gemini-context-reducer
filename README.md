@@ -24,17 +24,17 @@ By shifting the heavy lifting of code traversal from the LLM's context window to
 
 The server provides three highly optimized tools to the AI agent, allowing it to navigate the codebase progressively rather than swallowing it whole:
 
-### 1. `read_file_skeleton` (The Token Saver)
+### 1. `read_file_skeleton` 
 Instead of returning a 2,000-line file, this tool returns a condensed structural map of the file.
 * **Domain-Specific Reduction:** It drops all function/method bodies, returning only exported Interfaces, Type Aliases, Class properties/signatures, and Arrow Function signatures.
 * **Why it matters:** An LLM rarely needs to see the internal `for`-loop of a utility function just to understand how to interact with its API. This reduces file token payloads by up to 90%, allowing the agent to map out the repository architecture without bloating the context loop.
 
-### 2. `search_symbol` (The Navigator)
+### 2. `search_symbol`
 Instead of asking the LLM to write complex find commands or ingest multiple files to locate a definition, this tool offloads the search to standard system `grep`.
 * **Domain-Specific Reduction:** Quickly scans `.ts` and `.tsx` files for a specific symbol (e.g., `sendMessage`) and returns up to 10 file paths. 
 * **Why it matters:** Zero-token search. The LLM instantly knows *where* to look without having to parse the contents of irrelevant directories.
 
-### 3. `read_symbol_details` (The Surgical Strike)
+### 3. `read_symbol_details` 
 When the LLM identifies exactly which piece of code it needs to modify or analyze, it uses this tool.
 * **Domain-Specific Reduction:** Extracts the full implementation code for *only* the specific requested symbol (e.g., `ChatService.sendMessage`), leaving the rest of the file behind.
 * **Why it matters:** The LLM gets 100% of the relevant logic and 0% of the surrounding file noise.
