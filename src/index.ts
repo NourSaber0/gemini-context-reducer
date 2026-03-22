@@ -14,147 +14,95 @@ const server = new McpServer({
 
 // 2. Initialize the ts-morph AST parser
 const project = new Project({ skipAddingFilesFromTsConfig: true });
+// HELPER: Generates the zero-bloat skeleton for a single file
+function getFileSkeleton(absolutePath: string) {
+    const sourceFile = project.addSourceFileAtPath(absolutePath);
+    let skeleton = '';
+    const resolvedImports: { original: string, resolved: string }[] = [];
 
-// 3. Register your custom tool with the CLI
-server.tool(
-  'read_file_skeleton',
-  'Reads a TypeScript/JavaScript file and returns ONLY its structural skeleton (classes, methods, and exported functions) to save context window tokens.',
-  {
-    filePath: z.string().describe('The absolute or relative path to the file to analyze.'),
-  },
-  async ({ filePath }) => {
-    try {
-      const absolutePath = path.resolve(process.cwd(), filePath);
-      // Safety check: Does the file exist?
-      if (!fs.existsSync(absolutePath)) {
-        return {
-          content: [{ type: 'text', text: `Error: File not found at ${absolutePath}` }],
-          isError: true,
-        };
-      }
-      // REMINDER: Always use console.error for debugging in MCP! 
-      console.error(`[Context Reducer] Analyzing file: ${absolutePath}`);
+    // 1. Interfaces
+    sourceFile.getInterfaces().forEach(iface => {
+        skeleton += `${iface.isExported() ? 'export ' : ''}interface ${iface.getName()} {\n`;
+        iface.getProperties().forEach(prop => {
+            skeleton += `  ${prop.getName()}: ${prop.getTypeNode()?.getText() || 'any'};\n`;
+        });
+        skeleton += `}\n\n`;
+    });
 
-      const sourceFile = project.addSourceFileAtPath(absolutePath);
-      // const reductionMsg = '/* omitted */';
-      //   const prune = (node: any) => {
-      //       if (node.setBodyText) node.setBodyText(`\n    ${reductionMsg}\n`);
-      //   };
-      // // Extract Functions ,Classes and Methods, replacing their bodies with a placeholder message to indicate they were pruned.
-      // sourceFile.getFunctions().forEach(prune);
-      // sourceFile.getClasses().forEach(cls => {
-      //   prune(cls);
-      //   cls.getMethods().forEach(prune);
-      // });
-      // sourceFile.getExportedDeclarations().forEach((decls, name) => {
-      //   decls.forEach(decl => {
-      //     if (decl.getKindName() === 'FunctionDeclaration' || decl.getKindName() === 'MethodDeclaration' || decl.getKindName() === 'VariableDeclaration') prune(decl);
-      //   });
-      // });
-      // sourceFile.getVariableDeclarations().forEach(decl => {
-      //       const init = decl.getInitializer();
-      //       if (init && (Node.isArrowFunction(init) || Node.isFunctionExpression(init))) {
-      //           const body = (init as any).getBody();
-      //           if (body && Node.isBlock(body)) (init as any).setBodyText(`\n    ${reductionMsg}\n`);
-      //       }
-      // });
-      let skeleton = '';
+    // 2. Types
+    sourceFile.getTypeAliases().forEach(typeAlias => {
+        skeleton += `${typeAlias.isExported() ? 'export ' : ''}type ${typeAlias.getName()} = ${typeAlias.getTypeNode()?.getText() || 'any'};\n\n`;
+    });
 
-      // 1. Extract Interfaces
-      sourceFile.getInterfaces().forEach(iface => {
-          const exportKw = iface.isExported() ? 'export ' : '';
-          skeleton += `${exportKw}interface ${iface.getName()} {\n`;
-          iface.getProperties().forEach(prop => {
-              // getTypeNode() gets the raw text the dev wrote, avoiding type-checker bloat!
-              const typeStr = prop.getTypeNode()?.getText() || 'any';
-              skeleton += `  ${prop.getName()}: ${typeStr};\n`;
-          });
-          skeleton += `}\n\n`;
-      });
+    // 3. Classes
+    sourceFile.getClasses().forEach(cls => {
+        const extendsClause = cls.getExtends() ? ` extends ${cls.getExtends()?.getText()}` : '';
+        const implementsClause = cls.getImplements().length > 0 ? ` implements ${cls.getImplements().map(i => i.getText()).join(', ')}` : '';
+        skeleton += `${cls.isExported() ? 'export ' : ''}class ${cls.getName() || 'Anonymous'}${extendsClause}${implementsClause} {\n`;
+        cls.getProperties().forEach(prop => {
+            const modifiers = prop.getModifiers().map(m => m.getText()).join(' ');
+            skeleton += `  ${modifiers ? modifiers + ' ' : ''}${prop.getName()}: ${prop.getTypeNode()?.getText() || 'any'};\n`;
+        });
+        cls.getMethods().forEach(method => {
+            const modifiers = method.getModifiers().map(m => m.getText()).join(' ');
+            const params = method.getParameters().map(p => p.getText().replace(/\s+/g, ' ')).join(', ');
+            skeleton += `  ${modifiers ? modifiers + ' ' : ''}${method.getName()}(${params}): ${method.getReturnTypeNode()?.getText() || 'any'};\n`;
+        });
+        skeleton += `}\n\n`;
+    });
 
-      // 2. Extract Types (Type Aliases)
-      sourceFile.getTypeAliases().forEach(typeAlias => {
-          const exportKw = typeAlias.isExported() ? 'export ' : '';
-          const typeStr = typeAlias.getTypeNode()?.getText() || 'any';
-          skeleton += `${exportKw}type ${typeAlias.getName()} = ${typeStr};\n\n`;
-      });
+    // 4. Standalone Functions
+    sourceFile.getFunctions().forEach(func => {
+        const params = func.getParameters().map(p => p.getText().replace(/\s+/g, ' ')).join(', ');
+        skeleton += `${func.isExported() ? 'export ' : ''}function ${func.getName() || 'Anonymous'}(${params}): ${func.getReturnTypeNode()?.getText() || 'any'};\n`;
+    });
 
-      // 3. Extract Classes & Methods
-     // 3. Extract Classes, Properties, & Methods
-      sourceFile.getClasses().forEach(cls => {
-          const exportKw = cls.isExported() ? 'export ' : '';
-          
-          // Grab inheritance!
-          const extendsClause = cls.getExtends() ? ` extends ${cls.getExtends()?.getText()}` : '';
-          const implementsClause = cls.getImplements().length > 0 
-              ? ` implements ${cls.getImplements().map(i => i.getText()).join(', ')}` 
-              : '';
+    // 5. Variables & Arrow Functions
+    sourceFile.getVariableStatements().forEach(varStmt => {
+        const exportKw = varStmt.isExported() ? 'export ' : '';
+        const declKind = varStmt.getDeclarationKind();
+        varStmt.getDeclarations().forEach(decl => {
+            const init = decl.getInitializer();
+            if (init && (Node.isArrowFunction(init) || Node.isFunctionExpression(init))) {
+                const params = (init as any).getParameters().map((p: any) => p.getText().replace(/\s+/g, ' ')).join(', ');
+                skeleton += `${exportKw}${declKind} ${decl.getName()} = (${params}) => ${(init as any).getReturnTypeNode()?.getText() || 'any'};\n`;
+            } else if (varStmt.isExported()) {
+                skeleton += `${exportKw}${declKind} ${decl.getName()}: ${decl.getTypeNode()?.getText() || 'any'};\n`;
+            }
+        });
+    });
 
-          skeleton += `${exportKw}class ${cls.getName() || 'Anonymous'}${extendsClause}${implementsClause} {\n`;
-          
-          // Grab class properties (variables inside the class)!
-          cls.getProperties().forEach(prop => {
-              const modifiers = prop.getModifiers().map(m => m.getText()).join(' ');
-              const typeStr = prop.getTypeNode()?.getText() || 'any';
-              skeleton += `  ${modifiers ? modifiers + ' ' : ''}${prop.getName()}: ${typeStr};\n`;
-          });
+    // 6. Object Literal Methods
+    sourceFile.forEachDescendant(node => {
+        if (Node.isMethodDeclaration(node) && Node.isObjectLiteralExpression(node.getParent())) {
+            const params = node.getParameters().map(p => p.getText().replace(/\s+/g, ' ')).join(', ');
+            skeleton += `  [Object Method] ${node.getName()}(${params}): ${node.getReturnTypeNode()?.getText() || 'any'};\n`;
+        }
+    });
 
-          // Grab the methods!
-          cls.getMethods().forEach(method => {
-              const params = method.getParameters().map(p => p.getName()).join(', ');
-              const returnType = method.getReturnTypeNode()?.getText() || 'any';
-              skeleton += `  ${method.getName()}(${params}): ${returnType};\n`;
-          });
-          skeleton += `}\n\n`;
-      });
-
-      // 4. Extract Standalone Functions
-      sourceFile.getFunctions().forEach(func => {
-          const exportKw = func.isExported() ? 'export ' : '';
-          const params = func.getParameters().map(p => p.getName()).join(', ');
-          const returnType = func.getReturnTypeNode()?.getText() || 'any';
-          skeleton += `${exportKw}function ${func.getName() || 'Anonymous'}(${params}): ${returnType};\n`;
-      });
-      if (sourceFile.getFunctions().length > 0) skeleton += '\n';
-
-      // 5. Extract Variables & Arrow Functions
-      sourceFile.getVariableStatements().forEach(varStmt => {
-          const exportKw = varStmt.isExported() ? 'export ' : '';
-          const declKind = varStmt.getDeclarationKind(); // 'const', 'let', or 'var'
-
-          varStmt.getDeclarations().forEach(decl => {
-              const init = decl.getInitializer();
-              
-              // Check if the variable is actually an arrow function!
-              if (init && (Node.isArrowFunction(init) || Node.isFunctionExpression(init))) {
-                  const params = (init as any).getParameters().map((p: any) => p.getName()).join(', ');
-                  const returnType = (init as any).getReturnTypeNode()?.getText() || 'any';
-                  skeleton += `${exportKw}${declKind} ${decl.getName()} = (${params}) => ${returnType};\n`;
-              } 
-              // Otherwise, if it's a standard exported constant, just grab its type
-              else if (varStmt.isExported()) {
-                  const typeStr = decl.getTypeNode()?.getText() || 'any';
-                  skeleton += `${exportKw}${declKind} ${decl.getName()}: ${typeStr};\n`;
-              }
-          });
-      });
-        const imports = sourceFile.getImportDeclarations()
-    .map(imp => {
+    // 7. Map Imports
+    sourceFile.getImportDeclarations().forEach(imp => {
         const mod = imp.getModuleSpecifierValue();
         const res = resolveImportPath(absolutePath, mod);
-        return res ? `${mod} -> ${res}` : null;
-    })
-    .filter(Boolean)
-    .join('\n');
-      const output = sourceFile.getFullText();
-      sourceFile.forget(); 
-      
-      // Pass 'imports' and 'skeleton' directly! No stringify, no full text!
-      return { content: [{ type: 'text', text: `RESOLVED_IMPORTS:\n${imports}\n\nSKELETON:\n${skeleton}` }] };
-  // return { content: [{ type: 'text', text: `RESOLVED_IMPORTS:\n${JSON.stringify(imports, null, 2)}\n\nSKELETON:\n${output}` }] };
-  //   } catch (e: any) {
-  //       return { content: [{ type: 'text', text: String(e), isError: true }] };
-  //   }
+        if (res) resolvedImports.push({ original: mod, resolved: res });
+    });
+
+    sourceFile.forget();
+    return { skeleton, resolvedImports };
+}
+
+server.tool('read_file_skeleton', {
+    filePath: z.string().describe('The path to the file to analyze.')
+}, async ({ filePath }) => {
+    try {
+        const absolutePath = path.resolve(process.cwd(), filePath);
+        if (!fs.existsSync(absolutePath)) return { content: [{ type: 'text', text: `Error: File not found` }], isError: true };
+        
+        console.error(`[Context Reducer] Analyzing file: ${absolutePath}`);
+        const { skeleton, resolvedImports } = getFileSkeleton(absolutePath);
+        
+        const importsStr = resolvedImports.map(i => `${i.original} -> ${i.resolved}`).join('\n');
+        return { content: [{ type: 'text', text: `RESOLVED_IMPORTS:\n${importsStr}\n\nSKELETON:\n${skeleton}` }] };
     } catch (e: any) {
         return { content: [{ type: 'text', text: String(e), isError: true }] };
     }
@@ -197,12 +145,16 @@ server.tool('search_symbol', {
     try {
         // Sanitize to prevent regex injection or shell escapes
         const sanitizedQuery = query.replace(/[^a-zA-Z0-9_.-]/g, '');
-        const results = execFileSync('grep', ['-rl', '--include=*.ts', '--include=*.tsx', sanitizedQuery, '.'], {
+        
+        // UPGRADE: Changed -rl to -rn to get line numbers AND code snippets!
+        const results = execFileSync('grep', ['-rn', '--include=*.ts', '--include=*.tsx', sanitizedQuery, '.'], {
             encoding: 'utf-8',
             maxBuffer: 1024 * 1024
         });
-        const list = results.split('\n').filter(Boolean).slice(0, 10);
-        return { content: [{ type: 'text', text: `Found in:\n${list.join('\n') || 'No matches.'}` }] };
+        
+        // Grab the top 15 results
+        const list = results.split('\n').filter(Boolean).slice(0, 15);
+        return { content: [{ type: 'text', text: `SMART SNIPPETS FOUND:\n${list.join('\n') || 'No matches.'}` }] };
     } catch (e: any) {
         if (e.status === 1) return { content: [{ type: 'text', text: "No matches found." }] };
         return { content: [{ type: 'text', text: `Search failed: ${e.message}`, isError: true }] };
@@ -240,10 +192,48 @@ server.tool('read_symbol_details', {
         return { content: [{ type: 'text', text: String(e), isError: true }] };
     }
 });
+server.tool('trace_feature_graph', {
+    entryFilePath: z.string().describe('The starting file path to trace (e.g., "apps/meteor/server/services/push/service.ts")'),
+    maxDepth: z.number().min(1).max(2).default(1).describe('How deep to trace dependencies (1 = entry file + its direct local imports)')
+}, async ({ entryFilePath, maxDepth }) => {
+    try {
+        const absoluteEntryPath = path.resolve(process.cwd(), entryFilePath);
+        if (!fs.existsSync(absoluteEntryPath)) return { content: [{ type: 'text', text: `Error: File not found` }], isError: true };
+
+        const visited = new Set<string>();
+        let graphOutput = '';
+
+        function traverse(filePath: string, currentDepth: number, callerName: string) {
+            if (currentDepth > maxDepth || visited.has(filePath)) return;
+            visited.add(filePath);
+
+            console.error(`[Context Reducer] Tracing Graph Node: ${filePath}`);
+            const { skeleton, resolvedImports } = getFileSkeleton(filePath);
+            
+            const relPath = path.relative(process.cwd(), filePath);
+            graphOutput += `\n=========================================\n`;
+            graphOutput += `📄 FILE: ${relPath}\n`;
+            graphOutput += `🔗 IMPORTED BY: ${callerName}\n`;
+            graphOutput += `=========================================\n`;
+            graphOutput += `${skeleton}\n`;
+
+            // Only trace internal Rocket.Chat / Meteor files, ignore node_modules
+            const localImports = resolvedImports.filter(i => !i.original.startsWith('node_modules') && !i.original.match(/^[a-z\-]+$/));
+            
+            localImports.forEach(imp => {
+                traverse(imp.resolved, currentDepth + 1, relPath);
+            });
+        }
+
+        traverse(absoluteEntryPath, 0, 'USER_PROMPT');
+
+        return { content: [{ type: 'text', text: graphOutput }] };
+    } catch (e: any) {
+        return { content: [{ type: 'text', text: String(e), isError: true }] };
+    }
+});
 
 
-
-// 4. Start the server and connect it to standard I/O
 async function run() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
